@@ -5,7 +5,7 @@ A gpiochip compatible driver for the Quancom PCITTL32IO PCI GPIO card
 
 This repository contais the source code for a Linux PCI driver for the Quancom PCITTL32IO PCI GPIO Card. The driver should show be used as an example for how to write a PCI driver in Linux. It will support the gpiochip implementation, so you can use the gpiod tools like gpioset and gpioget to access the GPIO Pins of this card.
 
-The documentation of this card can be found on the [Quancom website](http://quancom.de/qprod01/deu/pb/pci_io_card.htm).
+The documentation of this card can be found on the [Quancom website]([http://quancom.de/qprod01/deu/pb/pci_io_card.htm](http://quancom.de/qprod01/deu/files/manual_deutsch_pcittl32io_pcittl64io.pdf/$file/Manual_deutsch_PCITTL32IO_PCITTL64IO.pdf)).
 
 ## Video Tutorials
 
