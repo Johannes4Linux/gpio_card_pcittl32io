@@ -26,7 +26,72 @@ MODULE_DEVICE_TABLE(pci, pcittl32io_ids);
  *              negative error code on failure
  */
 static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+	u16 vid, did;
+	u8 capability_ptr;
+	u32 bar0, saved_bar0;
+
 	printk("pcittl32io - Now I am in the probe function.\n");
+
+	/* Let's read the PCIe VID and DID */
+	if(0 != pci_read_config_word(dev, 0x0, &vid)) {
+		printk("pcittl32io - Error reading from config space\n");
+		return -1;
+	}
+	printk("pcittl32io - VID; 0x%x\n", vid);
+	if(0 != pci_read_config_word(dev, 0x2, &did)) {
+		printk("pcittl32io - Error reading from config space\n");
+		return -1;
+	}
+	printk("pcittl32io - DID; 0x%x\n", did);
+
+	/* Read the pci capability pointer */
+	printk("pcittl32io - VID; 0x%x\n", vid);
+	if(0 != pci_read_config_byte(dev, 0x34, &capability_ptr)) {
+		printk("pcittl32io - Error reading from config space\n");
+		return -1;
+	}
+	if(capability_ptr) 
+		printk("pcittl32io - PCI card has capabilities!\n");
+	else
+		printk("pcittl32io - PCI card doesn't have capabilities!\n");
+
+
+	if(0 != pci_read_config_dword(dev, 0x10, &bar0)) {
+		printk("pcittl32io - Error reading from config space\n");
+		return -1;
+	}
+
+	saved_bar0 = bar0;
+
+	if(0 != pci_write_config_dword(dev, 0x10, 0xffffffff)) {
+		printk("pcittl32io - Error writing to config space\n");
+		return -1;
+	}
+
+	if(0 != pci_read_config_dword(dev, 0x10, &bar0)) {
+		printk("pcittl32io - Error reading from config space\n");
+		return -1;
+	}
+
+	if((bar0 & 0x3) == 1) 
+		printk("pcittl32io - BAR0 is IO space\n");
+	else
+		printk("pcittl32io - BAR0 is memory space\n");
+
+	bar0 &= 0xFFFFFFFD;
+	bar0 = ~bar0;
+	bar0++;
+
+	printk("pcittl32io - BAR0 is %d bytes big\n", bar0);
+
+
+	if(0 != pci_write_config_dword(dev, 0x10, saved_bar0)) {
+		printk("pcittl32io - Error writing to config space\n");
+		return -1;
+	}
+
+
+	
 	return 0;
 }
 
