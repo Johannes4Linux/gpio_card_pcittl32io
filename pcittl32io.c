@@ -2,6 +2,10 @@
 #include <linux/init.h>
 #include <linux/pci.h>
 
+#define PCITTL32IO_GPIO_STATE 0xFC
+#define PCITTL32IO_DIRECTION  0xF8
+
+
 #define PCITTL32IO_VENDOR_ID 0x8008
 #define PCITTL32IO_DEVICE_ID 0x3301
 
@@ -26,72 +30,41 @@ MODULE_DEVICE_TABLE(pci, pcittl32io_ids);
  *              negative error code on failure
  */
 static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id) {
-	u16 vid, did;
-	u8 capability_ptr;
-	u32 bar0, saved_bar0;
+	void __iomem *ptr_bar0;
+	int status;
 
 	printk("pcittl32io - Now I am in the probe function.\n");
 
-	/* Let's read the PCIe VID and DID */
-	if(0 != pci_read_config_word(dev, 0x0, &vid)) {
-		printk("pcittl32io - Error reading from config space\n");
-		return -1;
-	}
-	printk("pcittl32io - VID; 0x%x\n", vid);
-	if(0 != pci_read_config_word(dev, 0x2, &did)) {
-		printk("pcittl32io - Error reading from config space\n");
-		return -1;
-	}
-	printk("pcittl32io - DID; 0x%x\n", did);
-
-	/* Read the pci capability pointer */
-	printk("pcittl32io - VID; 0x%x\n", vid);
-	if(0 != pci_read_config_byte(dev, 0x34, &capability_ptr)) {
-		printk("pcittl32io - Error reading from config space\n");
-		return -1;
-	}
-	if(capability_ptr) 
-		printk("pcittl32io - PCI card has capabilities!\n");
-	else
-		printk("pcittl32io - PCI card doesn't have capabilities!\n");
-
-
-	if(0 != pci_read_config_dword(dev, 0x10, &bar0)) {
-		printk("pcittl32io - Error reading from config space\n");
+	status = pci_resource_len(dev, 0);
+	printk("pcittl32io - BAR0 is %d bytes in size\n", status);
+	if(status != 256) {
+		printk("pcittl32io - Wrong size of BAR0!\n");
 		return -1;
 	}
 
-	saved_bar0 = bar0;
+	printk("pcittl32io - BAR0 is mapped to 0x%llx\n", pci_resource_start(dev, 0));
 
-	if(0 != pci_write_config_dword(dev, 0x10, 0xffffffff)) {
-		printk("pcittl32io - Error writing to config space\n");
+	status = pcim_enable_device(dev);
+	if(status < 0) {
+		printk("pcittl32io - Could not enable device\n");
+		return status;
+	}
+
+	status = pcim_iomap_regions(dev, BIT(0), KBUILD_MODNAME);
+	if(status < 0) {
+		printk("pcittl32io - BAR0 is already in use!\n");
+		return status;
+	}
+
+	ptr_bar0 = pcim_iomap_table(dev)[0];
+	if(ptr_bar0 == NULL) {
+		printk("pcittl32io - BAR0 pointer is invalid\n");
 		return -1;
 	}
 
-	if(0 != pci_read_config_dword(dev, 0x10, &bar0)) {
-		printk("pcittl32io - Error reading from config space\n");
-		return -1;
-	}
+	printk("pcittl32io - GPIO State DWord 0x%x\n", ioread32(ptr_bar0 + PCITTL32IO_GPIO_STATE));
+	iowrite8(0x1, ptr_bar0 + PCITTL32IO_DIRECTION);
 
-	if((bar0 & 0x3) == 1) 
-		printk("pcittl32io - BAR0 is IO space\n");
-	else
-		printk("pcittl32io - BAR0 is memory space\n");
-
-	bar0 &= 0xFFFFFFFD;
-	bar0 = ~bar0;
-	bar0++;
-
-	printk("pcittl32io - BAR0 is %d bytes big\n", bar0);
-
-
-	if(0 != pci_write_config_dword(dev, 0x10, saved_bar0)) {
-		printk("pcittl32io - Error writing to config space\n");
-		return -1;
-	}
-
-
-	
 	return 0;
 }
 
