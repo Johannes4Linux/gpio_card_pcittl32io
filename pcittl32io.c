@@ -4,6 +4,7 @@
 
 #define PCITTL32IO_GPIO_STATE 0xFC
 #define PCITTL32IO_DIRECTION  0xF8
+#define PCITTL32IO_OFFSET_IRQ  0xF9
 
 
 #define PCITTL32IO_VENDOR_ID 0x8008
@@ -20,6 +21,21 @@ static struct pci_device_id pcittl32io_ids[] = {
 };
 MODULE_DEVICE_TABLE(pci, pcittl32io_ids);
 
+struct drv_data {
+	void __iomem *ptr_bar0;
+};
+
+irqreturn_t my_irq_handler(int irq, void *data) {
+	struct drv_data *my_data;
+	printk("pcittl32io - Now I am in the IRQ service routine!\n");
+	my_data = (struct drv_data *) data;
+
+	if(my_data != NULL)
+		iowrite8((1 | (1<<1)), my_data->ptr_bar0 + PCITTL32IO_OFFSET_IRQ);
+	return IRQ_HANDLED;
+}
+
+
 /**
  * @brief Function is called, when a PCI device is registered
  *
@@ -30,7 +46,7 @@ MODULE_DEVICE_TABLE(pci, pcittl32io_ids);
  *              negative error code on failure
  */
 static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id) {
-	void __iomem *ptr_bar0;
+	struct drv_data *my_data;
 	int status;
 
 	printk("pcittl32io - Now I am in the probe function.\n");
@@ -56,15 +72,31 @@ static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		return status;
 	}
 
-	ptr_bar0 = pcim_iomap_table(dev)[0];
-	if(ptr_bar0 == NULL) {
+	my_data = devm_kzalloc(&dev->dev, sizeof(struct drv_data), GFP_KERNEL);
+	if(my_data == NULL) {
+		printk("pcittl32io - Error! Out of memory\n");
+		return -ENOMEM;
+	}
+
+	my_data->ptr_bar0 = pcim_iomap_table(dev)[0];
+	if(my_data->ptr_bar0 == NULL) {
 		printk("pcittl32io - BAR0 pointer is invalid\n");
 		return -1;
 	}
 
-	printk("pcittl32io - GPIO State DWord 0x%x\n", ioread32(ptr_bar0 + PCITTL32IO_GPIO_STATE));
-	iowrite8(0x1, ptr_bar0 + PCITTL32IO_DIRECTION);
+	printk("pcittl32io - GPIO State DWord 0x%x\n", ioread32(my_data->ptr_bar0 + PCITTL32IO_GPIO_STATE));
 
+	/* Let's set up the interrupt */
+	if(dev->irq) {
+		status = devm_request_irq(&dev->dev, dev->irq, my_irq_handler, 0, KBUILD_MODNAME, my_data);
+		if(status) {
+			printk("pcittl32io - Error requesting IRQ\n");
+			return -1;
+		}
+		printk("pcittl32io - Requesting IRQ %d was successful\n", dev->irq);
+		/* Setup PCI device */
+		iowrite8((1 | (1<<1)), my_data->ptr_bar0 + PCITTL32IO_OFFSET_IRQ);
+	}
 	return 0;
 }
 
