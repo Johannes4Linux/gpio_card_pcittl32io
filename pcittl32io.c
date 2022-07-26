@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/pci.h>
+#include <linux/gpio.h>
 
 #define PCITTL32IO_GPIO_STATE 0xFC
 #define PCITTL32IO_DIRECTION  0xF8
@@ -21,19 +22,89 @@ static struct pci_device_id pcittl32io_ids[] = {
 };
 MODULE_DEVICE_TABLE(pci, pcittl32io_ids);
 
-struct drv_data {
+struct pcittl32io_gpiochip {
 	void __iomem *ptr_bar0;
+	struct gpio_chip chip;
 };
 
-irqreturn_t my_irq_handler(int irq, void *data) {
-	struct drv_data *my_data;
-	printk("pcittl32io - Now I am in the IRQ service routine!\n");
-	my_data = (struct drv_data *) data;
+static void pcittl32io_set_multiple(struct gpio_chip *chip, unsigned long *mask, unsigned long *bits) {
+	u32 val;
+	struct pcittl32io_gpiochip *gpio = gpiochip_get_data(chip);
 
-	if(my_data != NULL)
-		iowrite8((1 | (1<<1)), my_data->ptr_bar0 + PCITTL32IO_OFFSET_IRQ);
-	return IRQ_HANDLED;
+	val = ioread32(gpio->ptr_bar0 + PCITTL32IO_GPIO_STATE);
+	val = (val & *mask) | *bits;
+	iowrite32(val, gpio->ptr_bar0 + PCITTL32IO_GPIO_STATE);
 }
+
+static void pcittl32io_set(struct gpio_chip *chip, unsigned gpio_nr, int value) {
+	unsigned long mask = 0, bits = 0;
+	mask = ~(1 << gpio_nr);
+	bits = (value << gpio_nr);
+	pcittl32io_set_multiple(chip, &mask, &bits);
+}
+
+static int pcittl32io_get_multiple(struct gpio_chip *chip, unsigned long *mask, unsigned long *bits) {
+	u32 val;
+	struct pcittl32io_gpiochip *gpio = gpiochip_get_data(chip);
+
+	val = ioread32(gpio->ptr_bar0 + PCITTL32IO_GPIO_STATE);
+	*bits = (val & *mask);
+	return 0;
+}
+	
+static int pcittl32io_get(struct gpio_chip *chip, unsigned gpio_nr) {
+	unsigned long mask = 0, bits = 0;
+
+	mask = (1< gpio_nr);
+	pcittl32io_get_multiple(chip, &mask, &bits);
+	return (bits > 0) ? 1 : 0;
+}
+
+static int pcittl32io_get_direction(struct gpio_chip *chip, unsigned gpio_nr) {
+	u8 val;
+	struct pcittl32io_gpiochip *gpio = gpiochip_get_data(chip);
+
+	val = ioread8(gpio->ptr_bar0 + PCITTL32IO_DIRECTION);
+	val = val & (1<<(gpio_nr/8));
+	return (val > 0) ? GPIO_LINE_DIRECTION_OUT : GPIO_LINE_DIRECTION_IN;
+}
+
+static int pcittl32io_set_direction_input(struct gpio_chip *chip, unsigned gpio_nr) {
+	u8 val;
+	struct pcittl32io_gpiochip *gpio = gpiochip_get_data(chip);
+
+	val = ioread8(gpio->ptr_bar0 + PCITTL32IO_DIRECTION);
+	val &= ~(1 << (gpio_nr / 8));
+	iowrite8(val, gpio->ptr_bar0 + PCITTL32IO_DIRECTION);
+	return 0;
+}
+
+static int pcittl32io_set_direction_output(struct gpio_chip *chip, unsigned gpio_nr, int value) {
+	u8 val;
+	struct pcittl32io_gpiochip *gpio = gpiochip_get_data(chip);
+
+	val = ioread8(gpio->ptr_bar0 + PCITTL32IO_DIRECTION);
+	val |= (1 << (gpio_nr / 8));
+	iowrite8(val, gpio->ptr_bar0 + PCITTL32IO_DIRECTION);
+	pcittl32io_set(chip, gpio_nr, value);
+	return 0;
+}
+
+static const struct gpio_chip template_chip = {
+	.label = "pcittl32io",
+	.owner = THIS_MODULE,
+	/* Function to control gpios */
+	.get_direction = pcittl32io_get_direction,
+	.direction_input = pcittl32io_set_direction_input,
+	.direction_output = pcittl32io_set_direction_output,
+	.set = pcittl32io_set,
+	.set_multiple = pcittl32io_set_multiple,
+	.get = pcittl32io_get,
+	.get_multiple = pcittl32io_get_multiple,
+	.base = -1,
+	.ngpio = 32,
+	.can_sleep = true,
+};
 
 
 /**
@@ -46,7 +117,7 @@ irqreturn_t my_irq_handler(int irq, void *data) {
  *              negative error code on failure
  */
 static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id) {
-	struct drv_data *my_data;
+	struct pcittl32io_gpiochip *my_data;
 	int status;
 
 	printk("pcittl32io - Now I am in the probe function.\n");
@@ -72,7 +143,7 @@ static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		return status;
 	}
 
-	my_data = devm_kzalloc(&dev->dev, sizeof(struct drv_data), GFP_KERNEL);
+	my_data = devm_kzalloc(&dev->dev, sizeof(struct pcittl32io_gpiochip), GFP_KERNEL);
 	if(my_data == NULL) {
 		printk("pcittl32io - Error! Out of memory\n");
 		return -ENOMEM;
@@ -84,19 +155,14 @@ static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		return -1;
 	}
 
-	printk("pcittl32io - GPIO State DWord 0x%x\n", ioread32(my_data->ptr_bar0 + PCITTL32IO_GPIO_STATE));
-
-	/* Let's set up the interrupt */
-	if(dev->irq) {
-		status = devm_request_irq(&dev->dev, dev->irq, my_irq_handler, 0, KBUILD_MODNAME, my_data);
-		if(status) {
-			printk("pcittl32io - Error requesting IRQ\n");
-			return -1;
-		}
-		printk("pcittl32io - Requesting IRQ %d was successful\n", dev->irq);
-		/* Setup PCI device */
-		iowrite8((1 | (1<<1)), my_data->ptr_bar0 + PCITTL32IO_OFFSET_IRQ);
+	my_data->chip = template_chip;
+	if(gpiochip_add_data(&my_data->chip, my_data) < 0) {
+		printk("pcittl32io - Error! Can't add gpiochip\n");
+		return -1;
 	}
+
+	pci_set_drvdata(dev, my_data);
+
 	return 0;
 }
 
@@ -106,7 +172,10 @@ static int pcittl32io_probe(struct pci_dev *dev, const struct pci_device_id *id)
  * @param dev   pointer to the PCI device
  */
 static void pcittl32io_remove(struct pci_dev *dev) {
+	struct pcittl32io_gpiochip * my_data = pci_get_drvdata(dev);
 	printk("pcittl32io - Now I am in the remove function.\n");
+	if(my_data) 
+		gpiochip_remove(&my_data->chip);
 }
 
 /* PCI driver struct */
