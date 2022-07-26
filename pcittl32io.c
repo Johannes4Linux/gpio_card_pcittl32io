@@ -55,7 +55,7 @@ static int pcittl32io_get_multiple(struct gpio_chip *chip, unsigned long *mask, 
 static int pcittl32io_get(struct gpio_chip *chip, unsigned gpio_nr) {
 	unsigned long mask = 0, bits = 0;
 
-	mask = (1< gpio_nr);
+	mask = (1<< gpio_nr);
 	pcittl32io_get_multiple(chip, &mask, &bits);
 	return (bits > 0) ? 1 : 0;
 }
